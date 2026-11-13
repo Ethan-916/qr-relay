@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0F172A" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>QR-Relay 动态二维码低延迟中继系统</title>
+
+  <!-- 公共 HTTPS CDN 依赖库（带主备容灾加载） -->
+  <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"
+          onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/mqtt@5.3.5/dist/mqtt.min.js'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"
+          onerror="this.onerror=null;this.src='https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js'"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+          onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js'"></script>
+
+  <style>
+    :root {
+      --bg-base: #0F172A;
+      --bg-surface: #1E293B;
+      --bg-surface-hover: #334155;
+      --border-subtle: rgba(148, 163, 184, 0.18);
+      --text-primary: #F8FAFC;
+      --text-secondary: #94A3B8;
+      --accent-blue: #3B82F6;
+      --accent-blue-hover: #2563EB;
+      --accent-emerald: #10B981;
+      --accent-emerald-hover: #059669;
+      --accent-amber: #F59E0B;
+      --accent-red: #EF4444;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      height: 100%;
+      width: 100%;
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* 主容器：移动端优先 480px 居中，单屏零滚动 */
+    .app-shell {
+      width: 100%;
+      max-width: 480px;
+      height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--bg-base);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .view {
+      display: none;
+      flex-direction: column;
+      height: 100%;
+      width: 100%;
+      padding: env(safe-area-inset-top, 12px) 16px env(safe-area-inset-bottom, 14px) 16px;
+      overflow-y: auto;
+    }
+
+    .view.active {
+      display: flex;
+    }
+
+    /* 顶部环境安全告警条 */
+    .env-alerts {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .alert-banner {
+      display: none;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 500;
+      border: 1px solid transparent;
+    }
+
+    .alert-banner.visible {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .alert-danger {
+      background: rgba(239, 68, 68, 0.16);
+      border-color: rgba(239, 68, 68, 0.45);
+      color: #FCA5A5;
+    }
+
+    .alert-warning {
+      background: rgba(245, 158, 11, 0.16);
+      border-color: rgba(245, 158, 11, 0.45);
+      color: #FCD34D;
+    }
+
+    /* 启动配置页 (Launcher) */
+    .launcher-header {
+      text-align: center;
+      padding: 10px 0 14px 0;
+    }
+
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      color: #60A5FA;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .launcher-header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+
+    .launcher-header p {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+
+    .form-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    .label-hint {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-secondary);
+    }
+
+    .input-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .text-input, .select-input {
+      width: 100%;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      padding: 11px 12px;
+      font-size: 15px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .text-input:focus, .select-input:focus {
+      border-color: var(--accent-blue);
+    }
+
+    .icon-btn {
+      flex-shrink: 0;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .icon-btn:active {
+      transform: scale(0.96);
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+    }
+
+    .topic-preview {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-all;
+      background: rgba(15, 23, 42, 0.55);
+      padding: 6px 8px;
+      border-radius: 6px;
+    }
+
+    /* 折叠高级选项 */
+    details.advanced-box {
+      margin-top: 12px;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 10px;
+    }
+
+    details.advanced-box summary {
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    details.advanced-box summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .advanced-content {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* 模式入口按钮组 */
+    .mode-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: auto;
+      padding-bottom: 4px;
+    }
+
+    .mode-btn {
+      width: 100%;
+      border: none;
+      border-radius: var(--radius-lg);
+      padding: 15px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      text-align: left;
+      cursor: pointer;
+      color: #FFFFFF;
+      transition: transform 0.12s, filter 0.15s;
+    }
+
+    .mode-btn:active {
+      transform: scale(0.985);
+    }
+
+    .btn-sender {
+      background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+      box-shadow: 0 8px 20px -6px rgba(16, 185, 129, 0.45);
+    }
+
+    .btn-receiver {
+      background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%);
+      box-shadow: 0 8px 20px -6px rgba(59, 130, 246, 0.45);
+    }
+
+    .mode-btn-title {
+      font-size: 16px;
+      font-weight: 700;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .mode-btn-desc {
+      font-size: 12px;
+      opacity: 0.9;
+      display: block;
+    }
+
+    .mode-btn-arrow {
+      font-size: 20px;
+      font-weight: 700;
+      opacity: 0.9;
+    }
+
+    /* 顶部通用导航栏（采集端 & 展示端） */
+    .top-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-bottom: 10px;
+      flex-shrink: 0;
+    }
+
+    .back-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      padding: 7px 11px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .back-btn:active {
+      background: var(--bg-surface-hover);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      font-size: 12px;
+      font-weight: 600;
+      max-width: 65%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-connected {
+      background-color: var(--accent-emerald);
+      box-shadow: 0 0 8px var(--accent-emerald);
+    }
+
+    .dot-connecting {
+      background-color: var(--accent-amber);
+      animation: pulseDot 1.2s infinite;
+    }
+
+    .dot-disconnected {
+      background-color: var(--accent-red);
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    /* ================= 教室采集端 (Sender View) ================= */
+    .viewport-wrapper {
+      position: relative;
+      flex: 1;
+      min-height: 240px;
+      background: #020617;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #camera-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform-origin: center center;
+      transition: transform 0.08s linear;
+    }
+
+    /* 半透明遮罩与中央 65% 绿色扫描框 */
+    .scan-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .scan-box {
+      width: 65%;
+      aspect-ratio: 1 / 1;
+      border: 2px solid rgba(16, 185, 129, 0.85);
+      border-radius: 14px;
+      box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.55);
+      position: relative;
+      transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+    }
+
+    .scan-box.flash-success {
+      border-color: #34D399;
+      border-width: 3px;
+      box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.55), inset 0 0 24px rgba(16, 185, 129, 0.55), 0 0 20px rgba(16, 185, 129, 0.8);
+      transform: scale(1.02);
+    }
+
+    /* 四角装饰线 */
+    .scan-box::before, .scan-box::after {
+      content: "";
+      position: absolute;
+      inset: -3px;
+      border-radius: 16px;
+      pointer-events: none;
+    }
+
+    .scan-laser {
+      position: absolute;
+      left: 6%;
+      right: 6%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #10B981, transparent);
+      top: 10%;
+      animation: laserSweep 2.2s ease-in-out infinite;
+    }
+
+    @keyframes laserSweep {
+      0%, 100% { top: 10%; opacity: 0.4; }
+      50% { top: 88%; opacity: 1; }
+    }
+
+    .hud-badges {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+      pointer-events: none;
+    }
+
+    .hud-tag {
+      background: rgba(15, 23, 42, 0.78);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      color: #E2E8F0;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+
+    .camera-error-box {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.94);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      z-index: 10;
+    }
+
+    .camera-error-box.visible {
+      display: flex;
+    }
+
+    .camera-error-box h3 {
+      color: #FCA5A5;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .camera-error-box p {
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    /* 变焦与底部状态控制面板 */
+    .sender-controls {
+      flex-shrink: 0;
+      padding-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .zoom-panel {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+    }
+
+    .zoom-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .zoom-mode-label {
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .zoom-val-label {
+      color: var(--accent-emerald);
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .zoom-slider {
+      width: 100%;
+      accent-color: var(--accent-emerald);
+      height: 6px;
+      cursor: pointer;
+    }
+
+    .sender-footer-bar {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .last-sent-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .last-sent-status {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-emerald);
+      margin-bottom: 2px;
+    }
+
+    .last-sent-url {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .resend-btn {
+      flex-shrink: 0;
+      background: rgba(59, 130, 246, 0.18);
+      border: 1px solid rgba(59, 130, 246, 0.45);
+      color: #93C5FD;
+      border-radius: var(--radius-sm);
+      padding: 8px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .resend-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .resend-btn:not(:disabled):active {
+      transform: scale(0.95);
+      background: rgba(59, 130, 246, 0.32);
+    }
+
+    /* ================= 远程展示端 (Receiver View) ================= */
+    .receiver-stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      min-height: 0;
+    }
+
+    /* 强制纯白隔离区与 24px 静默区，严禁反色 */
+    .qr-white-card {
+      color-scheme: light !important;
+      background-color: #FFFFFF !important;
+      color: #000000 !important;
+      padding: 24px !important;
+      border-radius: 20px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      border: 4px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      max-width: 100%;
+      transition: border-color 0.25s ease, transform 0.25s ease;
+    }
+
+    .qr-white-card.pulse-new {
+      animation: cardPulse 0.32s ease-out;
+    }
+
+    @keyframes cardPulse {
+      0% {
+        transform: scale(0.97);
+        border-color: #10B981;
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0.35), 0 12px 32px rgba(0, 0, 0, 0.45);
+      }
+      100% {
+        transform: scale(1);
+        border-color: transparent;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      }
+    }
+
+    #qrcode-container {
+      width: 280px;
+      height: 280px;
+      max-width: calc(100vw - 96px);
+      max-height: calc(100vw - 96px);
+      background-color: #FFFFFF !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* 隐藏 qrcodejs 生成的原始 canvas，仅展示单张高对比度 img，防止双码并排撑破容器 */
+    #qrcode-container canvas {
+      display: none !important;
+    }
+
+    #qrcode-container img {
+      width: 100% !important;
+      height: 100% !important;
+      display: block !important;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+
+    .qr-placeholder {
+      text-align: center;
+      color: #475569 !important;
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 16px;
+    }
+
+    .qr-placeholder-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    /* 新鲜度计时与状态卡片 */
+    .freshness-card {
+      width: 100%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+    }
+
+    .freshness-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .freshness-timer {
+      font-size: 18px;
+      font-weight: 800;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--text-primary);
+    }
+
+    .freshness-badge {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--text-secondary);
+    }
+
+    .freshness-badge.state-fresh {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34D399;
+    }
+
+    .freshness-badge.state-warn {
+      background: rgba(245, 158, 11, 0.2);
+      color: #FBBF24;
+    }
+
+    .freshness-badge.state-expired {
+      background: rgba(239, 68, 68, 0.2);
+      color: #F87171;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: var(--bg-base);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent-emerald);
+      border-radius: 999px;
+      transition: width 0.1s linear, background-color 0.2s ease;
+    }
+
+    .received-payload-text {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- ==================== 视图 1：环境自检与房间配置页 ==================== -->
+    <section id="view-launcher" class="view active">
+      <div class="env-alerts">
+        <div id="alert-https" class="alert-banner alert-danger">
+          <span>⚠️</span>
+          <div>当前非 HTTPS 安全环境，浏览器将禁止调用摄像头。请通过 HTTPS 域名或 localhost 访问。</div>
+        </div>
+        <div id="alert-wechat" class="alert-banner alert-warning">
+          <span>🧭</span>
+          <div>检测到微信内置浏览器：请点击右上角「···」选择<strong>「在默认浏览器中打开」</strong>（Chrome / Safari / Edge），以获得完整摄像头与常亮权限。</div>
+        </div>
+      </div>
+
+      <header class="launcher-header">
+        <div class="brand-badge">⚡ 毫秒级像素转文本信令中继</div>
+        <h1>QR-Relay 动态二维码中继</h1>
+        <p>端侧实时解码 · 百字节 WSS 转发 · 远程无损重绘</p>
+      </header>
+
+      <div class="card">
+        <label class="form-label" for="input-room">
+          <span>房间频道口令 (Room Secret)</span>
+          <span class="label-hint">两端输入相同口令即可配对</span>
+        </label>
+        <div class="input-group">
+          <input id="input-room" class="text-input" type="text" placeholder="例如: ouc_cs_2026" autocomplete="off" spellcheck="false" />
+          <button id="btn-random-room" class="icon-btn" type="button" title="随机生成口令">随机</button>
+          <button id="btn-copy-room" class="icon-btn" type="button" title="复制口令">复制</button>
+        </div>
+        <div id="topic-preview" class="topic-preview">Topic: qr-relay/v1/room/...</div>
+
+        <details class="advanced-box">
+          <summary>
+            <span>⚙️ 高级选项：MQTT WSS 信令节点设置</span>
+            <span>展开 ▾</span>
+          </summary>
+          <div class="advanced-content">
+            <select id="select-broker" class="select-input" aria-label="选择 MQTT Broker 节点">
+              <option value="wss://broker.emqx.io:8084/mqtt">主节点：EMQX 公共节点 (broker.emqx.io)</option>
+              <option value="wss://broker.hivemq.com:8884/mqtt">备用节点：HiveMQ 公共节点 (broker.hivemq.com)</option>
+            </select>
+          </div>
+        </details>
+      </div>
+
+      <div class="mode-actions">
+        <button id="btn-enter-sender" class="mode-btn btn-sender" type="button">
+          <div>
+            <span class="mode-btn-title">📷 我是教室端（扫码发送）</span>
+            <span class="mode-btn-desc">调用后置变焦镜头实时捕捉大屏并秒发文本</span>
+          </div>
+          <span class="mode-btn-arrow">→</span>
+        </button>
+
+        <button id="btn-enter-receiver" class="mode-btn btn-receiver" type="button">
+          <div>
+            <span class="mode-btn-title">📱 我是远程端（接收重绘）</span>
+            <span class="mode-btn-desc">实时重绘高对比度纯白底二维码供微信扫一扫</span>
+          </div>
+          <span class="mode-btn-arrow">→</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ==================== 视图 2：教室采集端 (Sender) ==================== -->
+    <section id="view-sender" class="view">
+      <nav class="top-nav">
+        <button id="btn-sender-back" class="back-btn" type="button">← 返回配置</button>
+        <div class="status-pill">
+          <span id="sender-mqtt-dot" class="dot dot-connecting"></span>
+          <span id="sender-mqtt-text">连接中...</span>
+        </div>
+      </nav>
+
+      <div id="viewport-wrapper" class="viewport-wrapper">
+        <video id="camera-video" autoplay playsinline muted></video>
+
+        <div class="hud-badges">
+          <span id="hud-engine" class="hud-tag">解码引擎: 初始化中</span>
+          <span id="hud-zoom-mode" class="hud-tag">变焦: 1.0x</span>
+        </div>
+
+        <div class="scan-overlay">
+          <div id="scan-box" class="scan-box">
+            <div class="scan-laser"></div>
+          </div>
+        </div>
+
+        <div id="camera-error-box" class="camera-error-box">
+          <h3>无法访问后置摄像头</h3>
+          <p id="camera-error-msg">请检查浏览器摄像头权限设置，或确认当前处于 HTTPS 安全连接下。</p>
+          <button id="btn-retry-camera" class="icon-btn" type="button">重新请求摄像头</button>
+        </div>
+      </div>
+
+      <div class="sender-controls">
+        <div class="zoom-panel">
+          <div class="zoom-header">
+            <span id="zoom-mode-title" class="zoom-mode-label">变焦调节（加载中）</span>
+            <span id="zoom-value-text" class="zoom-val-label">1.0x</span>
+          </div>
+          <input id="zoom-slider" class="zoom-slider" type="range" min="1" max="3" step="0.1" value="1" />
+        </div>
+
+        <div class="sender-footer-bar">
+          <div class="last-sent-info">
+            <div id="sender-status-title" class="last-sent-status">等待识别大屏二维码...</div>
+            <div id="sender-status-url" class="last-sent-url">请将绿色瞄准框对准投影或屏幕二维码</div>
+          </div>
+          <button id="btn-force-resend" class="resend-btn" type="button" disabled>强制重发当前码</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 视图 3：远程展示端 (Receiver) ==================== -->
+    <section id="view-receiver" class="view">
+      <nav class="top-nav">
+        <button id="btn-receiver-back" class="back-btn" type="button">← 返回配置</button>
+        <div class="status-pill">
+          <span id="receiver-mqtt-dot" class="dot dot-connecting"></span>
+          <span id="receiver-mqtt-text">连接中...</span>
+        </div>
+      </nav>
+
+      <main class="receiver-stage">
+        <div id="qr-white-card" class="qr-white-card">
+          <div id="qrcode-container">
+            <div class="qr-placeholder">
+              <span class="qr-placeholder-icon">📡</span>
+              <div><strong>等待教室端发送二维码</strong></div>
+              <div style="font-size: 12px; margin-top: 4px;">收到后将自动渲染高对比度黑白码</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="freshness-card">
+          <div class="freshness-header">
+            <span id="freshness-timer-text" class="freshness-timer">等待首帧...</span>
+            <span id="freshness-badge" class="freshness-badge">就绪</span>
+          </div>
+          <div class="progress-track">
+            <div id="freshness-progress" class="progress-fill"></div>
+          </div>
+          <div id="receiver-url-preview" class="received-payload-text">当前频道尚未收到数据</div>
+        </div>
+      </main>
+    </section>
+
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /* ================= 全局状态与常量 ================= */
+      const STORAGE_KEYS = {
+        ROOM: 'qr_relay_room_secret',
+        BROKER: 'qr_relay_broker_url'
+      };
+
+      const state = {
+        currentView: 'launcher',
+        roomSecret: '',
+        brokerUrl: 'wss://broker.emqx.io:8084/mqtt',
+        mqttClient: null,
+
+        // 采集端状态
+        mediaStream: null,
+        videoTrack: null,
+        wakeLock: null,
+        scanTimerId: null,
+        barcodeDetector: null,
+        detectorEngine: 'jsQR',
+        zoomMode: 'digital', // 'hardware' | 'digital'
+        currentZoom: 1.0,
+        lastSentText: '',
+        lastSentTime: 0,
+
+        // 展示端状态
+        qrInstance: null,
+        currentDisplayedText: '',
+        receivedAtPerf: 0,
+        freshnessTimerId: null
+      };
+
+      /* ================= DOM 引用缓存 ================= */
+      const dom = {
+        views: {
+          launcher: document.getElementById('view-launcher'),
+          sender: document.getElementById('view-sender'),
+          receiver: document.getElementById('view-receiver')
+        },
+        alertHttps: document.getElementById('alert-https'),
+        alertWechat: document.getElementById('alert-wechat'),
+        inputRoom: document.getElementById('input-room'),
+        btnRandomRoom: document.getElementById('btn-random-room'),
+        btnCopyRoom: document.getElementById('btn-copy-room'),
+        topicPreview: document.getElementById('topic-preview'),
+        selectBroker: document.getElementById('select-broker'),
+        btnEnterSender: document.getElementById('btn-enter-sender'),
+        btnEnterReceiver: document.getElementById('btn-enter-receiver'),
+
+        // 采集端 DOM
+        btnSenderBack: document.getElementById('btn-sender-back'),
+        senderMqttDot: document.getElementById('sender-mqtt-dot'),
+        senderMqttText: document.getElementById('sender-mqtt-text'),
+        viewportWrapper: document.getElementById('viewport-wrapper'),
+        cameraVideo: document.getElementById('camera-video'),
+        hudEngine: document.getElementById('hud-engine'),
+        hudZoomMode: document.getElementById('hud-zoom-mode'),
+        scanBox: document.getElementById('scan-box'),
+        cameraErrorBox: document.getElementById('camera-error-box'),
+        cameraErrorMsg: document.getElementById('camera-error-msg'),
+        btnRetryCamera: document.getElementById('btn-retry-camera'),
+        zoomModeTitle: document.getElementById('zoom-mode-title'),
+        zoomValueText: document.getElementById('zoom-value-text'),
+        zoomSlider: document.getElementById('zoom-slider'),
+        senderStatusTitle: document.getElementById('sender-status-title'),
+        senderStatusUrl: document.getElementById('sender-status-url'),
+        btnForceResend: document.getElementById('btn-force-resend'),
+
+        // 展示端 DOM
+        btnReceiverBack: document.getElementById('btn-receiver-back'),
+        receiverMqttDot: document.getElementById('receiver-mqtt-dot'),
+        receiverMqttText: document.getElementById('receiver-mqtt-text'),
+        qrWhiteCard: document.getElementById('qr-white-card'),
+        qrcodeContainer: document.getElementById('qrcode-container'),
+        freshnessTimerText: document.getElementById('freshness-timer-text'),
+        freshnessBadge: document.getElementById('freshness-badge'),
+        freshnessProgress: document.getElementById('freshness-progress'),
+        receiverUrlPreview: document.getElementById('receiver-url-preview')
+      };
+
+      // 离屏 Canvas（400x400px 兼顾解码精度与毫秒级性能）
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = 400;
+      offscreenCanvas.height = 400;
+      const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+      /* ================= 工具函数 ================= */
+      function generateRandomRoom() {
+        const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+        let code = 'cls_';
+        for (let i = 0; i < 6; i++) {
+          code += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return code;
+      }
+
+      function getTopic(room) {
+        return `qr-relay/v1/room/${encodeURIComponent(room.trim())}`;
+      }
+
+      function formatTimeWithMs(ts) {
+        const d = new Date(ts);
+        const pad = (n, len = 2) => String(n).padStart(len, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+      }
+
+      function switchView(viewName) {
+        Object.keys(dom.views).forEach((key) => {
+          dom.views[key].classList.toggle('active', key === viewName);
+        });
+        state.currentView = viewName;
+      }
+
+      /* ================= 模块一：环境自检与房间配置 ================= */
+      function runEnvironmentCheck() {
+        // 1. 检测 HTTPS 安全上下文
+        if (!window.isSecureContext) {
+          dom.alertHttps.classList.add('visible');
+        }
+        // 2. 检测微信内置浏览器
+        if (/MicroMessenger/i.test(navigator.userAgent)) {
+          dom.alertWechat.classList.add('visible');
+        }
+      }
+
+      function syncRoomConfigUI() {
+        const val = dom.inputRoom.value.trim() || 'default_room';
+        state.roomSecret = val;
+        localStorage.setItem(STORAGE_KEYS.ROOM, val);
+        dom.topicPreview.textContent = `Topic: ${getTopic(val)}`;
+      }
+
+      function initLauncher() {
+        runEnvironmentCheck();
+
+        const savedRoom = localStorage.getItem(STORAGE_KEYS.ROOM);
+        dom.inputRoom.value = savedRoom && savedRoom.trim() ? savedRoom.trim() : generateRandomRoom();
+        syncRoomConfigUI();
+
+        const savedBroker = localStorage.getItem(STORAGE_KEYS.BROKER);
+        if (savedBroker) {
+          dom.selectBroker.value = savedBroker;
+          state.brokerUrl = savedBroker;
+        }
+
+        dom.inputRoom.addEventListener('input', syncRoomConfigUI);
+
+        dom.btnRandomRoom.addEventListener('click', () => {
+          dom.inputRoom.value = generateRandomRoom();
+          syncRoomConfigUI();
+        });
+
+        dom.btnCopyRoom.addEventListener('click', async () => {
+          syncRoomConfigUI();
+          try {
+            await navigator.clipboard.writeText(state.roomSecret);
+            const oldText = dom.btnCopyRoom.textContent;
+            dom.btnCopyRoom.textContent = '已复制';
+            setTimeout(() => { dom.btnCopyRoom.textContent = oldText; }, 1200);
+          } catch (_) {
+            dom.inputRoom.select();
+            document.execCommand('copy');
+          }
+        });
+
+        dom.selectBroker.addEventListener('change', () => {
+          state.brokerUrl = dom.selectBroker.value;
+          localStorage.setItem(STORAGE_KEYS.BROKER, state.brokerUrl);
+        });
+
+        dom.btnEnterSender.addEventListener('click', () => {
+          if (!dom.inputRoom.value.trim()) {
+            dom.inputRoom.focus();
+            return;
+          }
+          syncRoomConfigUI();
+          enterSenderMode();
+        });
+
+        dom.btnEnterReceiver.addEventListener('click', () => {
+          if (!dom.inputRoom.value.trim()) {
+            dom.inputRoom.focus();
+            return;
+          }
+          syncRoomConfigUI();
+          enterReceiverMode();
+        });
+      }
+
+      /* ================= MQTT 公共连接管理 ================= */
+      function updateMqttBadge(role, status, text) {
+        const dotEl = role === 'sender' ? dom.senderMqttDot : dom.receiverMqttDot;
+        const textEl = role === 'sender' ? dom.senderMqttText : dom.receiverMqttText;
+        dotEl.className = `dot dot-${status}`;
+        textEl.textContent = text;
+      }
+
+      function disconnectMqtt() {
+        if (state.mqttClient) {
+          try {
+            state.mqttClient.end(true);
+          } catch (e) {
+            console.warn('MQTT disconnect warning:', e);
+          }
+          state.mqttClient = null;
+        }
+      }
+
+      function connectMqtt(role, onMessageCallback) {
+        disconnectMqtt();
+
+        if (typeof window.mqtt === 'undefined') {
+          updateMqttBadge(role, 'disconnected', 'MQTT库加载失败');
+          return;
+        }
+
+        const topic = getTopic(state.roomSecret);
+        const clientId = `qr_relay_${role}_${Math.random().toString(16).slice(2, 10)}`;
+
+        updateMqttBadge(role, 'connecting', '连接中...');
+
+        const client = window.mqtt.connect(state.brokerUrl, {
+          clientId,
+          clean: true,
+          connectTimeout: 8000,
+          reconnectPeriod: 2000,
+          keepalive: 30
+        });
+
+        state.mqttClient = client;
+
+        client.on('connect', () => {
+          updateMqttBadge(role, 'connected', `已连接 · ${state.roomSecret}`);
+          if (role === 'receiver') {
+            client.subscribe(topic, { qos: 0 }, (err) => {
+              if (err) {
+                updateMqttBadge(role, 'disconnected', '订阅频道失败');
+              }
+            });
+          }
+        });
+
+        client.on('reconnect', () => {
+          updateMqttBadge(role, 'connecting', '断线重连中...');
+        });
+
+        client.on('offline', () => {
+          updateMqttBadge(role, 'disconnected', '网络离线');
+        });
+
+        client.on('close', () => {
+          if (state.mqttClient === client) {
+            updateMqttBadge(role, 'disconnected', '连接已断开');
+          }
+        });
+
+        client.on('error', (err) => {
+          console.error('MQTT Error:', err);
+          updateMqttBadge(role, 'disconnected', '信令节点异常');
+        });
+
+        if (onMessageCallback) {
+          client.on('message', (receivedTopic, messageBuffer) => {
+            if (receivedTopic === topic) {
+              onMessageCallback(messageBuffer.toString());
+            }
+          });
+        }
+      }
+
+      /* ================= 模块二：教室采集端 (Sender) ================= */
+      async function requestScreenWakeLock() {
+        if ('wakeLock' in navigator) {
+          try {
+            state.wakeLock = await navigator.wakeLock.request('screen');
+          } catch (err) {
+            console.warn('WakeLock request failed:', err);
+          }
+        }
+      }
+
+      function releaseScreenWakeLock() {
+        if (state.wakeLock) {
+          state.wakeLock.release().catch(() => {});
+          state.wakeLock = null;
+        }
+      }
+
+      async function initDecoderEngine() {
+        if ('BarcodeDetector' in window) {
+          try {
+            if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+              const formats = await window.BarcodeDetector.getSupportedFormats();
+              if (Array.isArray(formats) && formats.includes('qr_code')) {
+                state.barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+                state.detectorEngine = 'BarcodeDetector';
+                dom.hudEngine.textContent = '引擎: BarcodeDetector';
+                return;
+              }
+            } else {
+              state.barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+              state.detectorEngine = 'BarcodeDetector';
+              dom.hudEngine.textContent = '引擎: BarcodeDetector';
+              return;
+            }
+          } catch (e) {
+            console.warn('BarcodeDetector unavailable, fallback to jsQR:', e);
+          }
+        }
+        state.barcodeDetector = null;
+        state.detectorEngine = 'jsQR';
+        dom.hudEngine.textContent = '引擎: jsQR (兼容模式)';
+      }
+
+      function setupZoomControls(track) {
+        let capabilities = {};
+        try {
+          capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+        } catch (e) {
+          capabilities = {};
+        }
+
+        if (capabilities && capabilities.zoom && typeof capabilities.zoom.max === 'number' && capabilities.zoom.max > capabilities.zoom.min) {
+          // 硬件光学/原生变焦模式
+          state.zoomMode = 'hardware';
+          const minZ = capabilities.zoom.min || 1;
+          const maxZ = Math.min(capabilities.zoom.max, 5);
+          const stepZ = capabilities.zoom.step || 0.1;
+
+          dom.zoomSlider.min = minZ;
+          dom.zoomSlider.max = maxZ;
+          dom.zoomSlider.step = stepZ;
+          dom.zoomSlider.value = minZ;
+          state.currentZoom = minZ;
+
+          dom.cameraVideo.style.transform = 'scale(1)';
+          dom.zoomModeTitle.textContent = `硬件无损变焦 (${minZ.toFixed(1)}x - ${maxZ.toFixed(1)}x)`;
+          dom.zoomValueText.textContent = `${minZ.toFixed(1)}x`;
+          dom.hudZoomMode.textContent = `硬件变焦: ${minZ.toFixed(1)}x`;
+        } else {
+          // 数字 ROI 中心裁剪放大兜底模式 (1.0x - 3.0x)
+          state.zoomMode = 'digital';
+          dom.zoomSlider.min = '1.0';
+          dom.zoomSlider.max = '3.0';
+          dom.zoomSlider.step = '0.1';
+          dom.zoomSlider.value = '1.0';
+          state.currentZoom = 1.0;
+
+          dom.cameraVideo.style.transform = 'scale(1)';
+          dom.zoomModeTitle.textContent = '数字 ROI 放大模式 (1.0x - 3.0x)';
+          dom.zoomValueText.textContent = '1.0x';
+          dom.hudZoomMode.textContent = '数字ROI: 1.0x';
+        }
+      }
+
+      async function handleZoomChange() {
+        const val = parseFloat(dom.zoomSlider.value) || 1.0;
+        state.currentZoom = val;
+        dom.zoomValueText.textContent = `${val.toFixed(1)}x`;
+
+        if (state.zoomMode === 'hardware' && state.videoTrack) {
+          dom.hudZoomMode.textContent = `硬件变焦: ${val.toFixed(1)}x`;
+          try {
+            await state.videoTrack.applyConstraints({
+              advanced: [{ zoom: val }]
+            });
+          } catch (err) {
+            console.warn('Hardware zoom constraint failed, switching to digital ROI:', err);
+            state.zoomMode = 'digital';
+            dom.cameraVideo.style.transform = `scale(${val})`;
+            dom.hudZoomMode.textContent = `数字ROI: ${val.toFixed(1)}x`;
+          }
+        } else {
+          dom.cameraVideo.style.transform = `scale(${val})`;
+          dom.hudZoomMode.textContent = `数字ROI: ${val.toFixed(1)}x`;
+        }
+      }
+
+      function stopCameraAndScanner() {
+        if (state.scanTimerId) {
+          clearInterval(state.scanTimerId);
+          state.scanTimerId = null;
+        }
+        if (state.mediaStream) {
+          state.mediaStream.getTracks().forEach((track) => {
+            try { track.stop(); } catch (_) {}
+          });
+          state.mediaStream = null;
+          state.videoTrack = null;
+        }
+        dom.cameraVideo.srcObject = null;
+        releaseScreenWakeLock();
+      }
+
+      async function startCameraAndScanner() {
+        stopCameraAndScanner();
+        dom.cameraErrorBox.classList.remove('visible');
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          dom.cameraErrorMsg.textContent = '当前浏览器不支持媒体设备接口，请使用最新版 Chrome、Safari 或 Edge，并确保网址为 HTTPS。';
+          dom.cameraErrorBox.classList.add('visible');
+          return;
+        }
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: false
+          });
+
+          state.mediaStream = stream;
+          const tracks = stream.getVideoTracks();
+          state.videoTrack = tracks[0] || null;
+
+          dom.cameraVideo.srcObject = stream;
+          await dom.cameraVideo.play();
+
+          if (state.videoTrack) {
+            setupZoomControls(state.videoTrack);
+          }
+
+          await initDecoderEngine();
+          startScanLoop();
+        } catch (err) {
+          console.error('Camera start error:', err);
+          let reason = '无法启动后置摄像头，请检查权限设置。';
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            reason = '摄像头权限被拒绝。请在浏览器地址栏左侧点击图标允许访问摄像头后重试。';
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            reason = '未检测到可用的后置摄像头设备。';
+          } else if (err.name === 'NotReadableError') {
+            reason = '摄像头正被其他应用占用，请关闭占用程序后重试。';
+          }
+          dom.cameraErrorMsg.textContent = reason;
+          dom.cameraErrorBox.classList.add('visible');
+        }
+      }
+
+      function publishQrPayload(text, isForced = false) {
+        if (!text || !state.mqttClient || !state.mqttClient.connected) return;
+
+        const now = Date.now();
+        const payload = JSON.stringify({
+          v: 1,
+          text: text,
+          ts: now
+        });
+
+        state.mqttClient.publish(getTopic(state.roomSecret), payload, { qos: 0 });
+        state.lastSentText = text;
+        state.lastSentTime = now;
+
+        dom.btnForceResend.disabled = false;
+        dom.senderStatusTitle.textContent = `${isForced ? '已强制重发' : '已发送新码'}（${formatTimeWithMs(now)}）`;
+        dom.senderStatusUrl.textContent = text;
+
+        // 绿色扫描框闪烁与轻触震动反馈
+        dom.scanBox.classList.remove('flash-success');
+        void dom.scanBox.offsetWidth;
+        dom.scanBox.classList.add('flash-success');
+        setTimeout(() => dom.scanBox.classList.remove('flash-success'), 260);
+
+        if (navigator.vibrate) {
+          navigator.vibrate(35);
+        }
+      }
+
+      function startScanLoop() {
+        if (state.scanTimerId) clearInterval(state.scanTimerId);
+
+        // 每 150ms 采样一帧进行中心 ROI 解码
+        state.scanTimerId = setInterval(async () => {
+          const video = dom.cameraVideo;
+          if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+            return;
+          }
+
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          const cw = dom.viewportWrapper.clientWidth || 360;
+          const ch = dom.viewportWrapper.clientHeight || 480;
+
+          // 计算 object-fit: cover 下的可见视频比例与中央 65% 瞄准框对应的原图 ROI 区域
+          const coverScale = Math.max(cw / vw, ch / vh);
+          const boxScreenPx = cw * 0.65;
+          const digitalFactor = state.zoomMode === 'digital' ? state.currentZoom : 1.0;
+
+          let cropSize = (boxScreenPx / coverScale) / digitalFactor;
+          cropSize = Math.max(80, Math.min(cropSize, vw, vh));
+
+          const sx = Math.max(0, (vw - cropSize) / 2);
+          const sy = Math.max(0, (vh - cropSize) / 2);
+
+          offscreenCtx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, 400, 400);
+
+          let decodedText = '';
+
+          // 1. 优先使用硬件加速 BarcodeDetector
+          if (state.barcodeDetector) {
+            try {
+              const barcodes = await state.barcodeDetector.detect(offscreenCanvas);
+              if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                decodedText = barcodes[0].rawValue;
+              }
+            } catch (err) {
+              console.warn('BarcodeDetector runtime error, downgrading to jsQR:', err);
+              state.barcodeDetector = null;
+              state.detectorEngine = 'jsQR';
+              dom.hudEngine.textContent = '引擎: jsQR (自动降级)';
+            }
+          }
+
+          // 2. 自动降级至纯 JS 解码库 jsQR
+          if (!decodedText && !state.barcodeDetector && typeof window.jsQR === 'function') {
+            try {
+              const imageData = offscreenCtx.getImageData(0, 0, 400, 400);
+              const code = window.jsQR(imageData.data, 400, 400, {
+                inversionAttempts: 'dontInvert'
+              });
+              if (code && code.data) {
+                decodedText = code.data;
+              }
+            } catch (err) {
+              console.warn('jsQR decode error:', err);
+            }
+          }
+
+          // 3. 严格去重并发送
+          if (decodedText && decodedText.trim() !== '') {
+            const cleanText = decodedText.trim();
+            if (cleanText !== state.lastSentText) {
+              publishQrPayload(cleanText, false);
+            }
+          }
+        }, 150);
+      }
+
+      function enterSenderMode() {
+        switchView('sender');
+        state.lastSentText = '';
+        state.lastSentTime = 0;
+        dom.btnForceResend.disabled = true;
+        dom.senderStatusTitle.textContent = '等待识别大屏二维码...';
+        dom.senderStatusUrl.textContent = '请将绿色瞄准框对准投影或屏幕二维码';
+
+        connectMqtt('sender');
+        requestScreenWakeLock();
+        startCameraAndScanner();
+      }
+
+      function exitSenderMode() {
+        stopCameraAndScanner();
+        disconnectMqtt();
+        switchView('launcher');
+      }
+
+      /* ================= 模块三：远程展示端 (Receiver) ================= */
+      function stopFreshnessTimer() {
+        if (state.freshnessTimerId) {
+          clearInterval(state.freshnessTimerId);
+          state.freshnessTimerId = null;
+        }
+      }
+
+      function startFreshnessTimer() {
+        stopFreshnessTimer();
+        state.receivedAtPerf = performance.now();
+
+        const updateTimerUI = () => {
+          const elapsedSec = (performance.now() - state.receivedAtPerf) / 1000;
+          dom.freshnessTimerText.textContent = `已生成：${elapsedSec.toFixed(1)}s`;
+
+          // 以 6.0s 作为标准动态二维码参考生命周期进度条
+          const pct = Math.min(100, (elapsedSec / 6.0) * 100);
+          dom.freshnessProgress.style.width = `${pct}%`;
+
+          if (elapsedSec <= 4.0) {
+            dom.freshnessProgress.style.backgroundColor = 'var(--accent-emerald)';
+            dom.freshnessBadge.className = 'freshness-badge state-fresh';
+            dom.freshnessBadge.textContent = '可立即扫码';
+          } else if (elapsedSec <= 5.5) {
+            dom.freshnessProgress.style.backgroundColor = 'var(--accent-amber)';
+            dom.freshnessBadge.className = 'freshness-badge state-warn';
+            dom.freshnessBadge.textContent = '即将刷新，抓紧扫码';
+          } else {
+            dom.freshnessProgress.style.backgroundColor = 'var(--accent-red)';
+            dom.freshnessBadge.className = 'freshness-badge state-expired';
+            dom.freshnessBadge.textContent = '二维码可能已失效，建议等待下一次刷新';
+          }
+        };
+
+        updateTimerUI();
+        state.freshnessTimerId = setInterval(updateTimerUI, 100);
+      }
+
+      function renderHighContrastQr(text) {
+        if (typeof window.QRCode === 'undefined') {
+          dom.qrcodeContainer.innerHTML = '<div class="qr-placeholder">QRCode 生成库加载失败，请刷新页面</div>';
+          return;
+        }
+
+        // 清空容器并生成 280x280px 高对比度纯黑白二维码
+        dom.qrcodeContainer.innerHTML = '';
+        state.qrInstance = new window.QRCode(dom.qrcodeContainer, {
+          text: text,
+          width: 280,
+          height: 280,
+          colorDark: '#000000',
+          colorLight: '#FFFFFF',
+          correctLevel: window.QRCode.CorrectLevel.M
+        });
+
+        state.currentDisplayedText = text;
+        dom.receiverUrlPreview.textContent = `内容：${text}`;
+
+        // 触发 300ms 卡片外边框高亮脉冲与短震动
+        dom.qrWhiteCard.classList.remove('pulse-new');
+        void dom.qrWhiteCard.offsetWidth;
+        dom.qrWhiteCard.classList.add('pulse-new');
+
+        if (navigator.vibrate) {
+          navigator.vibrate(60);
+        }
+
+        startFreshnessTimer();
+      }
+
+      function handleIncomingMqttMessage(rawPayload) {
+        try {
+          const data = JSON.parse(rawPayload);
+          if (!data || typeof data.text !== 'string') return;
+          const cleanText = data.text.trim();
+          if (!cleanText) return;
+
+          if (cleanText !== state.currentDisplayedText) {
+            renderHighContrastQr(cleanText);
+          } else {
+            // 若教室端点击“强制重发当前码”，仅刷新时间戳提示与轻提醒
+            startFreshnessTimer();
+            dom.qrWhiteCard.classList.remove('pulse-new');
+            void dom.qrWhiteCard.offsetWidth;
+            dom.qrWhiteCard.classList.add('pulse-new');
+          }
+        } catch (err) {
+          console.warn('Invalid MQTT JSON payload ignored:', err);
+        }
+      }
+
+      function enterReceiverMode() {
+        switchView('receiver');
+        stopFreshnessTimer();
+        state.currentDisplayedText = '';
+
+        dom.qrcodeContainer.innerHTML = `
+          <div class="qr-placeholder">
+            <span class="qr-placeholder-icon">📡</span>
+            <div><strong>等待教室端发送二维码</strong></div>
+            <div style="font-size: 12px; margin-top: 4px;">收到后将自动渲染高对比度黑白码</div>
+          </div>
+        `;
+        dom.freshnessTimerText.textContent = '等待首帧...';
+        dom.freshnessBadge.className = 'freshness-badge';
+        dom.freshnessBadge.textContent = '就绪';
+        dom.freshnessProgress.style.width = '0%';
+        dom.receiverUrlPreview.textContent = `正在监听房间：${state.roomSecret}`;
+
+        connectMqtt('receiver', handleIncomingMqttMessage);
+      }
+
+      function exitReceiverMode() {
+        stopFreshnessTimer();
+        disconnectMqtt();
+        state.currentDisplayedText = '';
+        switchView('launcher');
+      }
+
+      /* ================= 事件绑定与启动 ================= */
+      function bindGlobalEvents() {
+        dom.btnSenderBack.addEventListener('click', exitSenderMode);
+        dom.btnReceiverBack.addEventListener('click', exitReceiverMode);
+        dom.btnRetryCamera.addEventListener('click', startCameraAndScanner);
+        dom.zoomSlider.addEventListener('input', handleZoomChange);
+
+        dom.btnForceResend.addEventListener('click', () => {
+          if (state.lastSentText) {
+            publishQrPayload(state.lastSentText, true);
+          }
+        });
+
+        // 页面切回前台时自动重新申请屏幕常亮（仅在采集端激活时）
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible' && state.currentView === 'sender') {
+            requestScreenWakeLock();
+          }
+        });
+
+        // 离开页面时确保释放硬件资源
+        window.addEventListener('beforeunload', () => {
+          stopCameraAndScanner();
+          stopFreshnessTimer();
+          disconnectMqtt();
+        });
+      }
+
+      initLauncher();
+      bindGlobalEvents();
+    })();
+  </script>
+</body>
+</html>
